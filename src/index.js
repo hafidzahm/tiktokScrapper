@@ -1,77 +1,145 @@
-import axios from "axios";
 import dotenv from "dotenv";
-import fs from "graceful-fs";
+import { ProfileVideoService } from "./services/ProfileVideoService.js";
+import { SearchByHashtagService } from "./services/SearchByHashtagService.js";
+import { FileService } from "./services/FileService.js";
+
 dotenv.config();
 
-const API_URL = "https://api.scrapecreators.com/v3/tiktok/profile/videos";
-const API_KEY = process.env.TIKTOK_SCRAPPER_API;
-
-async function scrapeTiktoks(handle, max_cursor = null) {
-  try {
-    let url = `${API_URL}?handle=${handle}`;
-
-    if (max_cursor) {
-      url += `&max_cursor=${max_cursor}`;
-    }
-
-    const response = await axios.get(url, {
-      headers: {
-        "x-api-key": API_KEY,
-      },
-    });
-
-    return response.data;
-  } catch (error) {
-    console.error("Error scraping tiktoks:", error.message);
-  }
-}
-
-function formatTiktok(tiktok) {
-  console.log({ tiktok: JSON.stringify(tiktok, null, 2) });
-
-  return {
-    aweme_id: tiktok.aweme_id,
-    desc: tiktok.desc,
-    url: tiktok.share_url?.split("?")[0],
-    likes: tiktok.statistics.digg_count,
-    comments: tiktok.statistics.comment_count,
-    shares: tiktok.statistics.share_count,
-    views: tiktok.statistics.play_count,
-    create_time: tiktok.create_time,
-    video: tiktok?.video?.bit_rate?.[0]?.play_addr?.url_list?.[0],
-    videoCover: tiktok?.video?.cover,
-    videoHeight: tiktok?.video?.height,
-    videoWidth: tiktok?.video?.width,
+/**
+ * Parse command line arguments including flags
+ * @returns {Object} Parsed arguments
+ */
+function parseArguments() {
+  const args = process.argv.slice(2);
+  const parsed = {
+    command: args[0],
+    argument: args[1],
+    options: {},
   };
-}
 
-(async () => {
-  const start = Date.now();
-  const handle = "fajrialghani19";
-  let max_cursor = null;
-  let hasMore = true;
-  const tiktoks = [];
-
-  while (hasMore) {
-    const data = await scrapeTiktoks(handle, max_cursor);
-
-    if (data.aweme_list) {
-      console.log(`Fetched ${data.aweme_list.length} tiktoks`);
-      const formattedTiktoks = data.aweme_list.map(formatTiktok);
-      const rawTiktoks = data.aweme_list[0];
-      console.log({ formattedTiktoks });
-
-      console.log("formattedTiktoks.length", formattedTiktoks.length);
-      tiktoks.push(...formattedTiktoks);
-      tiktoks.push(rawTiktoks);
-      console.log(`Total tiktoks fetched: ${tiktoks.length}`);
+  // Parse options (--key=value format)
+  for (let i = 2; i < args.length; i++) {
+    const arg = args[i];
+    if (arg.startsWith("--")) {
+      const [key, value] = arg.slice(2).split("=");
+      parsed.options[key] = value || true;
     }
-    max_cursor = data.max_cursor;
-    hasMore = !!max_cursor;
   }
 
-  const end = Date.now();
-  console.log(`Total time taken: ${((end - start) / 1000).toFixed(2)} seconds`);
-  console.log(`Total tiktoks fetched: ${tiktoks.length}`);
-  fs.writeFileSync(`${handle}_tiktoks.json`, JSON.stringify(tiktoks, null, 2));
-})();
+  return parsed;
+}
+
+/**
+ * Display usage information
+ */
+function showUsage() {
+  console.log("Usage:");
+  console.log("  npm run tiktok-scrapping profile-scrapping <username>");
+  console.log(
+    "  npm run tiktok-scrapping -- search-hashtag <hashtag> [--region=<region>]"
+  );
+  console.log("");
+  console.log("Options:");
+  console.log(
+    "  --region=<region>    Set proxy region for hashtag search (e.g., US, ID, JP)"
+  );
+  console.log("");
+  console.log("Examples:");
+  console.log("  npm run tiktok-scrapping profile-scrapping orangsayacinta");
+  console.log("  npm run tiktok-scrapping search-hashtag fyp");
+  console.log("  npm run tiktok-scrapping -- search-hashtag fyp --region=ID");
+  console.log("");
+  console.log(
+    "Note: When using --region with npm, include -- before the command"
+  );
+  process.exit(1);
+}
+
+/**
+ * Scrape videos from a user profile
+ * @param {string} username - TikTok username to scrape
+ * @param {string} apiKey - API key for authentication
+ */
+async function scrapeProfile(username, apiKey) {
+  const scraperService = new ProfileVideoService(apiKey);
+  const tiktoks = await scraperService.scrapeAllVideos(username);
+
+  if (tiktoks.length > 0) {
+    FileService.saveProfileResults(username, tiktoks);
+    console.log(
+      `\nSuccessfully scraped ${tiktoks.length} videos from @${username}`
+    );
+  } else {
+    console.log(`No videos found for @${username}`);
+  }
+}
+
+/**
+ * Search videos by hashtag
+ * @param {string} hashtag - Hashtag to search (without #)
+ * @param {string} apiKey - API key for authentication
+ * @param {Object} options - Search options
+ */
+async function searchHashtag(hashtag, apiKey, options = {}) {
+  const region = options.region || "US";
+  console.log(`Using region: ${region}`);
+
+  const searchService = new SearchByHashtagService(apiKey);
+  const tiktoks = await searchService.scrapeAllByHashtag(hashtag, {
+    region: region,
+    maxPages: 10, // Limit to 10 pages to avoid excessive API calls
+  });
+
+  if (tiktoks.length > 0) {
+    FileService.saveHashtagResults(hashtag, tiktoks);
+    console.log(
+      `\nSuccessfully scraped ${tiktoks.length} videos for #${hashtag} (region: ${region})`
+    );
+  } else {
+    console.log(`No videos found for #${hashtag}`);
+  }
+}
+
+/**
+ * Main function to handle CLI commands
+ */
+async function main() {
+  try {
+    const { command, argument, options } = parseArguments();
+
+    // Validate command and argument
+    if (!command || !argument) {
+      console.error("Error: Missing command or argument");
+      showUsage();
+    }
+
+    // Validate API key
+    const apiKey = process.env.TIKTOK_SCRAPPER_API;
+    if (!apiKey) {
+      console.error(
+        "Error: TIKTOK_SCRAPPER_API environment variable is not set"
+      );
+      process.exit(1);
+    }
+
+    // Route to appropriate function based on command
+    switch (command) {
+      case "profile-scrapping":
+        await scrapeProfile(argument, apiKey);
+        break;
+
+      case "search-hashtag":
+        await searchHashtag(argument, apiKey, options);
+        break;
+
+      default:
+        console.error(`Error: Unknown command "${command}"`);
+        showUsage();
+    }
+  } catch (error) {
+    console.error("Error during scraping:", error.message);
+    process.exit(1);
+  }
+}
+
+main();
