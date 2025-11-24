@@ -16,6 +16,8 @@ export class TikTok {
     this.videoCover = rawData?.video?.cover;
     this.videoHeight = rawData?.video?.height;
     this.videoWidth = rawData?.video?.width;
+    this.thumbnail = rawData?.video?.dynamic_cover?.url_list?.[0];
+    this.videoWithoutWatermark = rawData?.video?.play_addr?.url_list?.[0];
   }
 
   /**
@@ -35,6 +37,8 @@ export class TikTok {
       videoCover: this.videoCover,
       videoHeight: this.videoHeight,
       videoWidth: this.videoWidth,
+      thumbnail: this.thumbnail,
+      videoWithoutWatermark: this.videoWithoutWatermark,
     };
   }
 
